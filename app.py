@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-import time
+import subprocess
+import os
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -53,6 +54,14 @@ def extraer_estadisticas_partido(context, url_partido):
 # --- PROCESO PRINCIPAL EN INTERFAZ ---
 
 if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
+    with st.spinner("Verificando e instalando componentes del navegador en el entorno virtual..."):
+        try:
+            # Forzamos la instalación de Chromium directamente usando el ejecutable de Python del entorno virtual
+            # Esto asegura que se instale exactamente en la ruta corta del venv que te pide el error.
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+        except Exception as e:
+            st.warning(f"Aviso de inicialización: {str(e)}. Intentando arrancar de todos modos...")
+
     with st.spinner("Iniciando escáner... Conectando a la sección EN DIRECTO con Playwright..."):
         try:
             # Inicializamos Playwright de forma síncrona
