@@ -17,7 +17,7 @@ def instalar_dependencias_playwright():
     """Instala Chromium de forma local en el proyecto para que no se pierda."""
     with st.spinner("Instalando componentes del navegador en el servidor local... (Solo la primera vez)"):
         # Asegura la instalación en la ruta que definimos arriba
-        os.system(f"python -m playwright install chromium")
+        os.system("python -m playwright install chromium")
 
 # Ejecutar la instalación limpia antes de todo
 instalar_dependencias_playwright()
@@ -107,4 +107,40 @@ async def ejecutar_escaneo_completo(status_placeholder):
             
             métricas_partido = await extraer_estadisticas_partido(context, url_match_stats)
             
-            registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante
+            # Línea corregida con comillas de cierre fijadas
+            registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante}"}
+            registro.update(métricas_partido)
+            lista_registros_finales.append(registro)
+            
+            barra_progreso.progress((idx + 1) / len(partidos_en_vivo))
+            
+        await browser.close()
+    return lista_registros_finales
+
+# --- CONTENEDOR REACTIVO AUTOMÁTICO ---
+
+@st.fragment(run_every=INTERVALO)
+def contenedor_monitoreo():
+    st.write(f"⏱️ *Última actualización solicitada: {pd.Timestamp.now().strftime('%H:%M:%S')}*")
+    estado_bot = st.empty()
+    
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        datos = loop.run_until_complete(ejecutar_escaneo_completo(estado_bot))
+        loop.close()
+        
+        estado_bot.empty()
+        
+        if datos is None:
+            st.warning("No se detectaron partidos en directo en este momento.")
+        elif len(datos) > 0:
+            df_final = pd.DataFrame(datos).fillna("-")
+            st.write("### 📈 Cuadro de Control General")
+            st.dataframe(df_final, use_container_width=True)
+            
+    except Exception as e:
+        estado_bot.error(f"Fallo en la actualización actual: {str(e)}")
+
+# Arrancar el monitor reactivo
+contenedor_monitoreo()
