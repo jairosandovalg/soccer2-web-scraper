@@ -1,28 +1,12 @@
 import streamlit as st
 import pandas as pd
 import asyncio
-import os
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-# --- CONFIGURACIÓN DE RUTA LOCAL PARA PLAYWRIGHT ---
-# Forzamos a Playwright a instalar y buscar el navegador dentro del directorio de la app
-NUEVA_RUTA_CACHE = os.path.join(os.getcwd(), ".playwright_cache")
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = NUEVA_RUTA_CACHE
-
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
 
-@st.cache_resource
-def instalar_dependencias_playwright():
-    """Instala Chromium de forma local en el proyecto para que no se pierda."""
-    with st.spinner("Instalando componentes del navegador en el servidor local... (Solo la primera vez)"):
-        # Asegura la instalación en la ruta que definimos arriba
-        os.system("python -m playwright install chromium")
-
-# Ejecutar la instalación limpia antes de todo
-instalar_dependencias_playwright()
-
-# --- INTERFAZ DE USUARIO ---
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
@@ -65,7 +49,7 @@ async def extraer_estadisticas_partido(context, url_partido):
 async def ejecutar_escaneo_completo(status_placeholder):
     lista_registros_finales = []
     
-    status_placeholder.write("🔍 Inicializando Playwright local...")
+    status_placeholder.write("🔍 Inicializando Playwright desde entorno...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -107,7 +91,6 @@ async def ejecutar_escaneo_completo(status_placeholder):
             
             métricas_partido = await extraer_estadisticas_partido(context, url_match_stats)
             
-            # Línea corregida con comillas de cierre fijadas
             registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante}"}
             registro.update(métricas_partido)
             lista_registros_finales.append(registro)
