@@ -1,146 +1,157 @@
 import streamlit as st
 import pandas as pd
-import subprocess
-import os
+import time
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
-
-# --- CONFIGURACIÓN DE RUTA PARA SERVIDORES CLOUD ---
-# Evita problemas de permisos descargando Chromium en el directorio temporal
-RUTA_TEMPORAL_NAVEGADOR = "/tmp/playwright-browsers"
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = RUTA_TEMPORAL_NAVEGADOR
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # Configuración de la interfaz de Streamlit
 st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
-def extraer_estadisticas_partido(context, url_partido):
-    """Navega a la URL del partido usando el contexto de Playwright y extrae las estadísticas."""
-    datos_stats = {}
-    page = context.new_page()
+@st.cache_resource
+def iniciar_navegador():
+    """Configura e inicia el navegador en modo oculto (headless) anti-detección."""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    
     try:
-        page.goto(url_partido, timeout=12000)
+        service = Service()
+        return webdriver.Chrome(service=service, options=chrome_options)
+    except Exception:
+        service = Service("/usr/bin/chromedriver")
+        chrome_options.binary_location = "/usr/bin/chromium-browser"
+        return webdriver.Chrome(service=service, options=chrome_options)
+
+def extraer_estadisticas_partido(driver, url_partido):
+    """Navega a la URL del partido y extrae los datos de la pestaña de Estadísticas."""
+    datos_stats = {}
+    try:
+        driver.get(url_partido)
         
-        # Esperar y hacer clic en la pestaña de Estadísticas
-        boton_stats = page.locator("//button[@role='tab' and contains(., 'Estadísticas')]")
-        boton_stats.wait_for(state="visible", timeout=4000)
-        boton_stats.click()
+        # 1. Esperar a que el botón de 'Estadísticas' sea cliqueable y presionarlo
+        boton_stats = WebDriverWait(driver, 7).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[@role='tab' and contains(., 'Estadísticas')]"))
+        )
+        driver.execute_script("arguments[0].click();", boton_stats)
+        time.sleep(1.5)  # Tiempo de espera para que carguen las barras internas del HTML
         
-        page.wait_for_timeout(1500)
-        
-        contenido = page.content()
-        soup = BeautifulSoup(contenido, "html.parser")
+        # 2. Parsear el documento HTML con BeautifulSoup
+        soup = BeautifulSoup(driver.page_source, "html.parser")
         filas_estadisticas = soup.find_all("div", {"data-testid": "wcl-statistics"})
         
         for fila in filas_estadisticas:
+            # Buscar el nombre de la categoría (Ej: 'Remates totales', 'Pases', etc.)
             cat_div = fila.find("div", {"data-testid": "wcl-statistics-category"})
             if cat_div:
                 categoria = cat_div.get_text(strip=True)
                 
+                # Buscar valores de Local y Visitante mediante sus respectivas clases
                 home_val_div = fila.find("div", class_=lambda x: x and 'wcl-homeValue' in x)
                 away_val_div = fila.find("div", class_=lambda x: x and 'wcl-awayValue' in x)
                 
                 val_home = home_val_div.get_text(strip=True) if home_val_div else "0"
                 val_away = away_val_div.get_text(strip=True) if away_val_div else "0"
                 
+                # Asignar al diccionario temporal de columnas
                 datos_stats[f"{categoria} (L)"] = val_home
                 datos_stats[f"{categoria} (V)"] = val_away
                 
     except Exception:
+        # Si un partido va iniciando y no tiene la pestaña habilitada, continúa sin detener el script
         pass
-    finally:
-        page.close()
     return datos_stats
 
 # --- PROCESO PRINCIPAL EN INTERFAZ ---
 
 if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
-    # Verificar instalación del navegador en la ruta temporal compartida
-    if not os.path.exists(RUTA_TEMPORAL_NAVEGADOR):
-        with st.spinner("Descargando componentes del navegador en el almacenamiento temporal..."):
-            try:
-                subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-            except Exception as e:
-                st.error(f"Error instalando el navegador: {str(e)}")
-
-    with st.spinner("Iniciando escáner... Conectando a la sección EN DIRECTO con Playwright..."):
+    with st.spinner("Iniciando escáner... Conectando a la sección EN DIRECTO..."):
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-                )
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                )
+            driver = iniciar_navegador()
+            
+            # Navegamos a la sección de partidos en directo
+            url_principal = "https://www.flashscore.pe/"
+            driver.get(url_principal)
+            
+            boton_directo = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'filters__text') and text()='EN DIRECTO']"))
+            )
+            driver.execute_script("arguments[0].click();", boton_directo)
+            time.sleep(4)
+            
+            # Detectar los partidos actuales usando BeautifulSoup
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+            partidos_en_vivo = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
+            
+            if not partidos_en_vivo:
+                st.warning("No se encontraron partidos en directo para analizar en este momento.")
+            else:
+                st.success(f"Se detectaron {len(partidos_en_vivo)} partidos activos. Extrayendo métricas individuales...")
                 
-                page = context.new_page()
-                page.goto("https://www.flashscore.pe/", timeout=20000)
+                # Barra de progreso visual en Streamlit
+                barra_progreso = st.progress(0)
+                lista_registros_finales = []
                 
-                # Detectar y cliquear el botón EN DIRECTO
-                boton_directo = page.locator("//div[contains(@class, 'filters__text') and text()='EN DIRECTO']")
-                boton_directo.wait_for(state="visible", timeout=10000)
-                boton_directo.click()
-                
-                page.wait_for_timeout(3000)
-                
-                # Parsear el documento HTML principal
-                contenido_principal = page.content()
-                soup = BeautifulSoup(contenido_principal, "html.parser")
-                partidos_en_vivo = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
-                
-                if not partidos_en_vivo:
-                    st.warning("No se encontraron partidos en directo para analizar en este momento.")
-                else:
-                    st.success(f"Se detectaron {len(partidos_en_vivo)} partidos activos. Extrayendo métricas...")
+                # Recorrer cada partido e ir recolectando su información interna
+                for idx, fila in enumerate(partidos_en_vivo):
+                    id_partido = fila.get('id').split('_')[-1]
+                    url_match_stats = f"https://www.flashscore.pe/partido/{id_partido}/#/resumen/estadisticas"
                     
-                    barra_progreso = st.progress(0)
-                    lista_registros_finales = []
+                    # Extraer los nombres de los equipos de la lista de origen
+                    local_div = fila.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
+                    visitante_div = fila.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
+                    nom_local = local_div.get_text(strip=True) if local_div else "Local"
+                    nom_visitante = visitante_div.get_text(strip=True) if visitante_div else "Visitante"
                     
-                    for idx, fila in enumerate(partidos_en_vivo):
-                        id_partido = fila.get('id').split('_')[-1]
-                        url_match_stats = f"https://www.flashscore.pe/partido/{id_partido}/#/resumen/estadisticas"
-                        
-                        # 1. Extraer nombres de los equipos
-                        local_div = fila.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
-                        visitante_div = fila.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
-                        nom_local = local_div.get_text(strip=True) if local_div else "Local"
-                        nom_visitante = visitante_div.get_text(strip=True) if visitante_div else "Visitante"
-                        
-                        # 2. Extraer el Marcador en Vivo directamente de la fila principal
-                        home_score_div = fila.find("div", class_=lambda c: c and "home" in c.lower() and "score" in c.lower())
-                        away_score_div = fila.find("div", class_=lambda c: c and "away" in c.lower() and "score" in c.lower())
-                        
-                        goles_local = home_score_div.get_text(strip=True) if home_score_div else "-"
-                        goles_visitante = away_score_div.get_text(strip=True) if away_score_div else "-"
-                        marcador_actual = f"{goles_local} - {goles_visitante}"
-                        
-                        # 3. Llamar a la función para extraer estadísticas internas de posesión/remates
-                        métricas_partido = extraer_estadisticas_partido(context, url_match_stats)
-                        
-                        # Consolidar registro final incluyendo el marcador al principio
-                        registro = {
-                            "Partido en Vivo": f"{nom_local} vs {nom_visitante}",
-                            "Marcador": marcador_actual
-                        }
-                        registro.update(métricas_partido)
-                        lista_registros_finales.append(registro)
-                        
-                        barra_progreso.progress((idx + 1) / len(partidos_en_vivo))
+                    # --- NUEVA EXTRACCIÓN: Marcador en Vivo ---
+                    home_score_div = fila.find("div", class_=lambda c: c and "home" in c.lower() and "score" in c.lower())
+                    away_score_div = fila.find("div", class_=lambda c: c and "away" in c.lower() and "score" in c.lower())
                     
-                    # Generar la tabla estructurada con Pandas
-                    df_final = pd.DataFrame(lista_registros_finales).fillna("-")
+                    goles_local = home_score_div.get_text(strip=True) if home_score_div else "-"
+                    goles_visitante = away_score_div.get_text(strip=True) if away_score_div else "-"
+                    marcador_actual = f"{goles_local} - {goles_visitante}"
                     
-                    # Reordenar columnas para dejar el Marcador visible al inicio
-                    columnas = ["Partido en Vivo", "Marcador"] + [col for col in df_final.columns if col not in ["Partido en Vivo", "Marcador"]]
-                    df_final = df_final[columnas]
+                    # Llamar a la función de raspado profundo por link
+                    métricas_partido = extraer_estadisticas_partido(driver, url_match_stats)
                     
-                    st.write("### 📈 Cuadro de Control General (Estadísticas Principales)")
-                    st.dataframe(df_final, use_container_width=True)
-                    st.balloons()
+                    # Consolidar los datos básicos junto a su marcador y sus estadísticas raspadas
+                    registro = {
+                        "Partido en Vivo": f"{nom_local} vs {nom_visitante}",
+                        "Marcador": marcador_actual
+                    }
+                    registro.update(métricas_partido)
+                    lista_registros_finales.append(registro)
+                    
+                    # Actualizar progreso en la pantalla de la app
+                    barra_progreso.progress((idx + 1) / len(partidos_en_vivo))
                 
-                browser.close()
+                # 3. Construir el cuadro de datos final usando Pandas
+                df_final = pd.DataFrame(lista_registros_finales)
+                
+                # Rellenar con guiones los espacios de estadísticas que no existan o no hayan cargado aún
+                df_final = df_final.fillna("-")
+                
+                # Reordenar las columnas para asegurar que el Marcador aparezca al inicio de la tabla
+                columnas_ordenadas = ["Partido en Vivo", "Marcador"] + [col for col in df_final.columns if col not in ["Partido en Vivo", "Marcador"]]
+                df_final = df_final[columnas_ordenadas]
+                
+                # Desplegar el cuadro interactivo en Streamlit
+                st.write("### 📈 Cuadro de Control General (Estadísticas Principales)")
+                st.dataframe(df_final, use_container_width=True)
+                
+                st.balloons()
+                
+            driver.quit()  # Cerrar de forma segura el driver al finalizar
                 
         except Exception as e:
             st.error(f"Fallo crítico en el sistema de análisis: {str(e)}")
