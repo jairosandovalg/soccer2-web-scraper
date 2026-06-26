@@ -5,16 +5,24 @@ import os
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-# --- CONFIGURACIÓN INICIAL ---
+# --- CONFIGURACIÓN DE RUTA LOCAL PARA PLAYWRIGHT ---
+# Forzamos a Playwright a instalar y buscar el navegador dentro del directorio de la app
+NUEVA_RUTA_CACHE = os.path.join(os.getcwd(), ".playwright_cache")
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = NUEVA_RUTA_CACHE
+
 st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
 
 @st.cache_resource
 def instalar_dependencias_playwright():
-    """Asegura que los binarios de Chromium estén instalados en el servidor."""
-    os.system("playwright install chromium")
+    """Instala Chromium de forma local en el proyecto para que no se pierda."""
+    with st.spinner("Instalando componentes del navegador en el servidor local... (Solo la primera vez)"):
+        # Asegura la instalación en la ruta que definimos arriba
+        os.system(f"python -m playwright install chromium")
 
+# Ejecutar la instalación limpia antes de todo
 instalar_dependencias_playwright()
 
+# --- INTERFAZ DE USUARIO ---
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
@@ -55,12 +63,10 @@ async def extraer_estadisticas_partido(context, url_partido):
     return datos_stats
 
 async def ejecutar_escaneo_completo(status_placeholder):
-    """Flujo principal con logs de estado directo en la UI."""
     lista_registros_finales = []
     
-    status_placeholder.write("🔍 Inicializando Playwright...")
+    status_placeholder.write("🔍 Inicializando Playwright local...")
     async with async_playwright() as p:
-        # Argumentos cruciales para evitar que la instancia de Chromium colapse en contenedores Linux
         browser = await p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
@@ -101,43 +107,4 @@ async def ejecutar_escaneo_completo(status_placeholder):
             
             métricas_partido = await extraer_estadisticas_partido(context, url_match_stats)
             
-            registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante}"}
-            registro.update(métricas_partido)
-            lista_registros_finales.append(registro)
-            
-            barra_progreso.progress((idx + 1) / len(partidos_en_vivo))
-            
-        await browser.close()
-    return lista_registros_finales
-
-# --- CONTENEDOR REACTIVO AUTOMÁTICO ---
-
-@st.fragment(run_every=INTERVALO)
-def contenedor_monitoreo():
-    st.write(f"⏱️ *Última actualización solicitada: {pd.Timestamp.now().strftime('%H:%M:%S')}*")
-    
-    # Marcador de posición para ver en tiempo real qué está haciendo el bot en segundo plano
-    estado_bot = st.empty()
-    
-    try:
-        # Una forma más segura y compatible de invocar el loop asíncrono en entornos mutables de Streamlit
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        datos = loop.run_until_complete(ejecutar_escaneo_completo(estado_bot))
-        loop.close()
-        
-        # Limpiar el mensaje de estado una vez que termine con éxito
-        estado_bot.empty()
-        
-        if datos is None:
-            st.warning("No se detectaron partidos en directo en este momento.")
-        elif len(datos) > 0:
-            df_final = pd.DataFrame(datos).fillna("-")
-            st.write("### 📈 Cuadro de Control General")
-            st.dataframe(df_final, use_container_width=True)
-            
-    except Exception as e:
-        estado_bot.error(f"Fallo en la actualización actual: {str(e)}")
-
-# Arrancar el monitor reactivo
-contenedor_monitoreo()
+            registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante
