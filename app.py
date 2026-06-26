@@ -1,37 +1,32 @@
 import streamlit as st
 import pandas as pd
-import asyncio
-import os
+import time
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 
-# --- CONFIGURACIÓN DE NAVEGADOR COMPATIBLE CON STREAMLIT CLOUD ---
-# Forzar a Playwright a usar el binario que Streamlit inyecta en el sistema
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0" 
-
+# Configuración de la interfaz de Streamlit
 st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
-
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
-# Control del tiempo de actualización en la barra lateral
-INTERVALO = st.sidebar.slider("⏱️ Intervalo de actualización automática (segundos)", 30, 300, 60)
-
-# --- FUNCIONES DE EXTRACCIÓN ---
-
-async def extraer_estadisticas_partido(context, url_partido):
+def extraer_estadisticas_partido(context, url_partido):
+    """Navega a la URL del partido usando el contexto de Playwright y extrae los datos."""
     datos_stats = {}
-    page = await context.new_page()
+    page = context.new_page()
     try:
-        await page.goto(url_partido, timeout=12000)
+        # Abrir enlace del partido con tiempo límite de 12 segundos
+        page.goto(url_partido, timeout=12000)
         
+        # Esperar y hacer clic en la pestaña de Estadísticas
         boton_stats = page.locator("//button[@role='tab' and contains(., 'Estadísticas')]")
-        await boton_stats.wait_for(state="visible", timeout=4000)
-        await boton_stats.click()
+        boton_stats.wait_for(state="visible", timeout=4000)
+        boton_stats.click()
         
-        await page.wait_for_timeout(1500)
+        # Esperar a que se rendericen las barras internas
+        page.wait_for_timeout(1500)
         
-        contenido = await page.content()
+        # Parsear el HTML con BeautifulSoup
+        contenido = page.content()
         soup = BeautifulSoup(contenido, "html.parser")
         filas_estadisticas = soup.find_all("div", {"data-testid": "wcl-statistics"})
         
@@ -39,96 +34,89 @@ async def extraer_estadisticas_partido(context, url_partido):
             cat_div = fila.find("div", {"data-testid": "wcl-statistics-category"})
             if cat_div:
                 categoria = cat_div.get_text(strip=True)
+                
                 home_val_div = fila.find("div", class_=lambda x: x and 'wcl-homeValue' in x)
                 away_val_div = fila.find("div", class_=lambda x: x and 'wcl-awayValue' in x)
                 
-                datos_stats[f"{categoria} (L)"] = home_val_div.get_text(strip=True) if home_val_div else "0"
-                datos_stats[f"{categoria} (V)"] = away_val_div.get_text(strip=True) if away_val_div else "0"
+                val_home = home_val_div.get_text(strip=True) if home_val_div else "0"
+                val_away = away_val_div.get_text(strip=True) if away_val_div else "0"
+                
+                datos_stats[f"{categoria} (L)"] = val_home
+                datos_stats[f"{categoria} (V)"] = val_away
+                
     except Exception:
-        pass
+        pass  # Continúa si el partido no tiene estadísticas activas
     finally:
-        await page.close()
+        page.close()  # Cerrar la pestaña para liberar memoria RAM
     return datos_stats
 
-async def ejecutar_escaneo_completo(status_placeholder):
-    lista_registros_finales = []
-    
-    status_placeholder.write("🔍 Inicializando Chromium desde el sistema...")
-    async with async_playwright() as p:
-        # Forzar el uso del binario del sistema embebido de Streamlit Cloud
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
-        
-        status_placeholder.write("🌐 Conectando a Flashscore...")
-        page = await context.new_page()
-        await page.goto("https://www.flashscore.pe/", timeout=20000)
-        
-        status_placeholder.write("📌 Filtrando partidos EN DIRECTO...")
-        boton_directo = page.locator("//div[contains(@class, 'filters__text') and text()='EN DIRECTO']")
-        await boton_directo.wait_for(state="visible", timeout=10000)
-        await boton_directo.click()
-        await page.wait_for_timeout(3000)
-        
-        contenido_principal = await page.content()
-        soup = BeautifulSoup(contenido_principal, "html.parser")
-        partidos_en_vivo = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
-        
-        if not partidos_en_vivo:
-            await browser.close()
-            return None
-            
-        status_placeholder.write(f"⚡ Procesando {len(partidos_en_vivo)} partidos encontrados...")
-        barra_progreso = st.progress(0)
-        
-        for idx, fila in enumerate(partidos_en_vivo):
-            id_partido = fila.get('id').split('_')[-1]
-            url_match_stats = f"https://www.flashscore.pe/partido/{id_partido}/#/resumen/estadisticas"
-            
-            local_div = fila.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
-            visitante_div = fila.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
-            nom_local = local_div.get_text(strip=True) if local_div else "Local"
-            nom_visitante = visitante_div.get_text(strip=True) if visitante_div else "Visitante"
-            
-            métricas_partido = await extraer_estadisticas_partido(context, url_match_stats)
-            
-            registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante}"}
-            registro.update(métricas_partido)
-            lista_registros_finales.append(registro)
-            
-            barra_progreso.progress((idx + 1) / len(partidos_en_vivo))
-            
-        await browser.close()
-    return lista_registros_finales
+# --- PROCESO PRINCIPAL EN INTERFAZ ---
 
-# --- CONTENEDOR REACTIVO AUTOMÁTICO ---
-
-@st.fragment(run_every=INTERVALO)
-def contenedor_monitoreo():
-    st.write(f"⏱ *Última actualización solicitada: {pd.Timestamp.now().strftime('%H:%M:%S')}*")
-    estado_bot = st.empty()
-    
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        datos = loop.run_until_complete(ejecutar_escaneo_completo(estado_bot))
-        loop.close()
-        
-        estado_bot.empty()
-        
-        if datos is None:
-            st.warning("No se detectaron partidos en directo en este momento.")
-        elif len(datos) > 0:
-            df_final = pd.DataFrame(datos).fillna("-")
-            st.write("### 📈 Cuadro de Control General")
-            st.dataframe(df_final, use_container_width=True)
-            
-    except Exception as e:
-        estado_bot.error(f"Fallo en la actualización actual: {str(e)}")
-
-# Arrancar el monitor reactivo
-contenedor_monitoreo()
+if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
+    with st.spinner("Iniciando escáner... Conectando a la sección EN DIRECTO con Playwright..."):
+        try:
+            # Inicializamos Playwright de forma síncrona
+            with sync_playwright() as p:
+                # Lanzar navegador con argumentos optimizados para servidores Linux cloud
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+                )
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                )
+                
+                page = context.new_page()
+                page.goto("https://www.flashscore.pe/", timeout=20000)
+                
+                # Detectar y cliquear el botón EN DIRECTO
+                boton_directo = page.locator("//div[contains(@class, 'filters__text') and text()='EN DIRECTO']")
+                boton_directo.wait_for(state="visible", timeout=10000)
+                boton_directo.click()
+                
+                # Espera de asentamiento de la lista
+                page.wait_for_timeout(3000)
+                
+                # Detectar los partidos actuales usando BeautifulSoup
+                contenido_principal = page.content()
+                soup = BeautifulSoup(contenido_principal, "html.parser")
+                partidos_en_vivo = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
+                
+                if not partidos_en_vivo:
+                    st.warning("No se encontraron partidos en directo para analizar en este momento.")
+                else:
+                    st.success(f"Se detectaron {len(partidos_en_vivo)} partidos activos. Extrayendo métricas individuales...")
+                    
+                    barra_progreso = st.progress(0)
+                    lista_registros_finales = []
+                    
+                    # Recorrer cada partido
+                    for idx, fila in enumerate(partidos_en_vivo):
+                        id_partido = fila.get('id').split('_')[-1]
+                        url_match_stats = f"https://www.flashscore.pe/partido/{id_partido}/#/resumen/estadisticas"
+                        
+                        local_div = fila.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
+                        visitante_div = fila.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
+                        nom_local = local_div.get_text(strip=True) if local_div else "Local"
+                        nom_visitante = visitante_div.get_text(strip=True) if visitante_div else "Visitante"
+                        
+                        # Pasar el contexto del navegador para procesar el partido
+                        métricas_partido = extraer_estadisticas_partido(context, url_match_stats)
+                        
+                        registro = {"Partido en Vivo": f"{nom_local} vs {nom_visitante}"}
+                        registro.update(métricas_partido)
+                        lista_registros_finales.append(registro)
+                        
+                        barra_progreso.progress((idx + 1) / len(partidos_en_vivo))
+                    
+                    # Construir la tabla final
+                    df_final = pd.DataFrame(lista_registros_finales).fillna("-")
+                    
+                    st.write("### 📈 Cuadro de Control General (Estadísticas Principales)")
+                    st.dataframe(df_final, use_container_width=True)
+                    st.balloons()
+                
+                browser.close()
+                
+        except Exception as e:
+            st.error(f"Fallo crítico en el sistema de análisis: {str(e)}")
