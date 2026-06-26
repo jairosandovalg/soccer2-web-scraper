@@ -5,21 +5,12 @@ import os
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-# --- FORZAR RUTAS DE EXECUTABLES EN STREAMLIT CLOUD ---
-# Esto obliga a Playwright a buscar en las carpetas globales por defecto de Linux en Streamlit
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/home/appuser/.cache/ms-playwright"
+# --- CONFIGURACIÓN DE NAVEGADOR COMPATIBLE CON STREAMLIT CLOUD ---
+# Forzar a Playwright a usar el binario que Streamlit inyecta en el sistema
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0" 
 
 st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
 
-@st.cache_resource
-def asegurar_instalacion_navegador():
-    """Fuerza la descarga en la ruta del sistema si no existe."""
-    # Intentamos lanzar la instalación directa del binario apuntando al entorno correcto
-    os.system("playwright install chromium")
-
-asegurar_instalacion_navegador()
-
-# --- INTERFAZ DE USUARIO ---
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
@@ -62,9 +53,9 @@ async def extraer_estadisticas_partido(context, url_partido):
 async def ejecutar_escaneo_completo(status_placeholder):
     lista_registros_finales = []
     
-    status_placeholder.write("🔍 Inicializando Chromium de Playwright...")
+    status_placeholder.write("🔍 Inicializando Chromium desde el sistema...")
     async with async_playwright() as p:
-        # Usamos launch_persistent_context o launch tradicional con argumentos seguros
+        # Forzar el uso del binario del sistema embebido de Streamlit Cloud
         browser = await p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
