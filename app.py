@@ -14,13 +14,12 @@ st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
-# ❌ ELIMINADO: @st.cache_resource (Causaba que se reutilizara un driver cerrado)
 def iniciar_navegador():
-    """Configura e inicia el navegador en modo oculto ultra-ligero para evitar colapsos de RAM."""
+    """Configura e inicia el navegador en modo oculto ultra-ligero."""
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage") # Obligatorio en Linux Cloud
+    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--no-first-run")
@@ -40,16 +39,16 @@ def iniciar_navegador():
             return None
 
 def extraer_estadisticas_partido(driver, url_partido):
-    """Navega de forma segura a la URL del partido y extrae la información sin romper el Driver."""
+    """Navega de forma segura a la URL del partido y extrae la información."""
     datos_partido = {
         "Marcador": "- - -",
         "Tiempo/Estado": "-",
+        "Minuto": "-",  # Nuevo campo inicializado
         "Stats": {}
     }
     try:
         driver.get(url_partido)
         
-        # Espera máxima de 5 segundos para no agotar el tiempo del servidor
         WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.detailScore__wrapper"))
         )
@@ -61,16 +60,21 @@ def extraer_estadisticas_partido(driver, url_partido):
         if score_wrapper:
             datos_partido["Marcador"] = score_wrapper.get_text(strip=True)
             
-        # Captura de Tiempo
+        # Captura de Tiempo/Estado (ej. "1er Tiempo")
         status_span = soup.select_one("span.fixedHeaderDuel__detailStatus")
         if status_span:
             datos_partido["Tiempo/Estado"] = status_span.get_text(strip=True)
+
+        # Captura del Minuto Exacto (ej. "27:41")
+        minuto_span = soup.select_one("span.eventTime")
+        if minuto_span:
+            datos_partido["Minuto"] = minuto_span.get_text(strip=True)
         
         # Click e inserción de Estadísticas numéricas
         botones_tab = driver.find_elements(By.XPATH, "//button[@role='tab' and contains(., 'Estadísticas')]")
         if botones_tab:
             driver.execute_script("arguments[0].click();", botones_tab[0])
-            time.sleep(1.0) # Tiempo justo y necesario para carga numérica
+            time.sleep(1.0)
             
             soup_stats = BeautifulSoup(driver.page_source, "html.parser")
             filas_estadisticas = soup_stats.find_all("div", {"data-testid": "wcl-statistics"})
@@ -86,7 +90,7 @@ def extraer_estadisticas_partido(driver, url_partido):
                     datos_partido["Stats"][f"{categoria} (V)"] = away_val_div.get_text(strip=True) if away_val_div else "0"
                     
     except Exception:
-        pass # Si el partido da timeout o error, se ignora de forma limpia para salvar el Driver
+        pass
         
     return datos_partido
 
@@ -130,10 +134,12 @@ if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
                     
                     resultado_profundo = extraer_estadisticas_partido(driver, url_match_stats)
                     
+                    # Estructuramos el nuevo registro incluyendo la columna "Minuto"
                     registro = {
                         "Partido en Vivo": f"{nom_local} vs {nom_visitante}",
                         "Marcador": resultado_profundo["Marcador"],
-                        "Tiempo/Estado": resultado_profundo["Tiempo/Estado"]
+                        "Tiempo/Estado": resultado_profundo["Tiempo/Estado"],
+                        "Minuto": resultado_profundo["Minuto"]  # Agregado aquí
                     }
                     registro.update(resultado_profundo["Stats"])
                     lista_registros_finales.append(registro)
@@ -142,7 +148,9 @@ if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
                 
                 # Armado estructurado de la tabla
                 df_final = pd.DataFrame(lista_registros_finales).fillna("-")
-                columnas_fijas = ["Partido en Vivo", "Marcador", "Tiempo/Estado"]
+                
+                # Agregamos "Minuto" a las columnas principales fijas a la izquierda
+                columnas_fijas = ["Partido en Vivo", "Marcador", "Tiempo/Estado", "Minuto"]
                 columnas_stats = [col for col in df_final.columns if col not in columnas_fijas]
                 df_final = df_final[columnas_fijas + columnas_stats]
                 
