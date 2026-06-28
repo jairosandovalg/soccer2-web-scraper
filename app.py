@@ -14,7 +14,7 @@ st.set_page_config(page_title="Bot de Estadísticas Final", layout="wide")
 st.title("📊 Monitor de Estadísticas en Vivo - Flashscore")
 st.subheader("Análisis de métricas en tiempo real para decisiones de apuestas")
 
-@st.cache_resource
+# ❌ ELIMINADO: @st.cache_resource (Causaba que se reutilizara un driver cerrado)
 def iniciar_navegador():
     """Configura e inicia el navegador en modo oculto ultra-ligero para evitar colapsos de RAM."""
     chrome_options = Options()
@@ -31,9 +31,13 @@ def iniciar_navegador():
         service = Service()
         return webdriver.Chrome(service=service, options=chrome_options)
     except Exception:
-        service = Service("/usr/bin/chromedriver")
-        chrome_options.binary_location = "/usr/bin/chromium-browser"
-        return webdriver.Chrome(service=service, options=chrome_options)
+        try:
+            service = Service("/usr/bin/chromedriver")
+            chrome_options.binary_location = "/usr/bin/chromium-browser"
+            return webdriver.Chrome(service=service, options=chrome_options)
+        except Exception as e:
+            st.error(f"No se pudo iniciar el binario de Chrome: {str(e)}")
+            return None
 
 def extraer_estadisticas_partido(driver, url_partido):
     """Navega de forma segura a la URL del partido y extrae la información sin romper el Driver."""
@@ -93,6 +97,9 @@ if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
         driver = None
         try:
             driver = iniciar_navegador()
+            if driver is None:
+                st.stop()
+                
             driver.get("https://www.flashscore.pe/")
             
             boton_directo = WebDriverWait(driver, 10).until(
@@ -147,7 +154,6 @@ if st.button("🔄 Ejecutar Escaneo Completo y Generar Tabla"):
             st.error(f"Fallo crítico en el sistema de análisis: {str(e)}")
             
         finally:
-            # EL CAMBIO MÁS IMPORTANTE: Pase lo que pase, el navegador DEBE cerrarse
             if driver is not None:
                 try:
                     driver.quit()
